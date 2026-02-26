@@ -19,12 +19,21 @@ fi
 APP_DIR="$ROOT_DIR/$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS/MacOS"
+RES_DIR="$CONTENTS/Resources"
 
 echo "== Create app bundle =="
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR"
+mkdir -p "$RES_DIR"
 
 cp "$BIN_PATH" "$MACOS_DIR/$APP_NAME"
+
+# Copy icon if present
+if [[ -f "$ROOT_DIR/icon.icns" ]]; then
+  cp "$ROOT_DIR/icon.icns" "$RES_DIR/icon.icns"
+else
+  echo "WARN: icon.icns not found at $ROOT_DIR/icon.icns (app will use default icon)"
+fi
 
 cat > "$CONTENTS/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -39,6 +48,10 @@ cat > "$CONTENTS/Info.plist" <<EOF
   <string>$APP_NAME</string>
   <key>CFBundleIdentifier</key>
   <string>$BUNDLE_ID</string>
+
+  <key>CFBundleIconFile</key>
+  <string>icon</string>
+
   <key>CFBundleVersion</key>
   <string>1</string>
   <key>CFBundleShortVersionString</key>
@@ -64,4 +77,4 @@ cp -R "$APP_DIR" "$DEST"
 
 echo "Installed: $DEST"
 echo "Launching..."
-open -a "$DEST"
+open "$DEST"
