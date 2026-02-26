@@ -3,3 +3,5 @@ DerivedData/
 *.app
 *.dmg
 *.zip
+.vscode/
+.DS_Store
