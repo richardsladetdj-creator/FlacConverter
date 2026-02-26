@@ -1,6 +1,10 @@
 # FlacConverter
 
-Simple macOS SwiftUI app that converts FLAC files to ALAC (.m4a).
+Lightweight drag-and-drop macOS utility for converting FLAC files to Apple Lossless (ALAC).
+
+## Screenshot
+
+![FlacConverter](docs/screenshot.png)
 
 ## Features
 
