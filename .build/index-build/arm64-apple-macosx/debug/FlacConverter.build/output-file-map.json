@@ -1,0 +1,19 @@
+{
+  "": {
+    "swift-dependencies": "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/index-build/arm64-apple-macosx/debug/FlacConverter.build/master.swiftdeps"
+  },
+  "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/Sources/FlacConverter/ConentView.swift": {
+    "dependencies": "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/index-build/arm64-apple-macosx/debug/FlacConverter.build/ConentView.d",
+    "object": "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/index-build/arm64-apple-macosx/debug/FlacConverter.build/ConentView.swift.o",
+    "swiftmodule": "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/index-build/arm64-apple-macosx/debug/FlacConverter.build/ConentView~partial.swiftmodule",
+    "swift-dependencies": "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/index-build/arm64-apple-macosx/debug/FlacConverter.build/ConentView.swiftdeps",
+    "diagnostics": "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/index-build/arm64-apple-macosx/debug/FlacConverter.build/ConentView.dia"
+  },
+  "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/Sources/FlacConverter/FlacConverterApp.swift": {
+    "dependencies": "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/index-build/arm64-apple-macosx/debug/FlacConverter.build/FlacConverterApp.d",
+    "object": "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/index-build/arm64-apple-macosx/debug/FlacConverter.build/FlacConverterApp.swift.o",
+    "swiftmodule": "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/index-build/arm64-apple-macosx/debug/FlacConverter.build/FlacConverterApp~partial.swiftmodule",
+    "swift-dependencies": "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/index-build/arm64-apple-macosx/debug/FlacConverter.build/FlacConverterApp.swiftdeps",
+    "diagnostics": "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/index-build/arm64-apple-macosx/debug/FlacConverter.build/FlacConverterApp.dia"
+  }
+}

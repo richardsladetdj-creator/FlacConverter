@@ -1,0 +1,81 @@
+client:
+  name: basic
+  file-system: device-agnostic
+tools: {}
+targets:
+  "FlacConverter-arm64-apple-macosx15.0-debug.exe": ["<FlacConverter-arm64-apple-macosx15.0-debug.exe>"]
+  "FlacConverter-arm64-apple-macosx15.0-debug.module": ["<FlacConverter-arm64-apple-macosx15.0-debug.module>"]
+  "PackageStructure": ["<PackageStructure>"]
+  "main": ["<FlacConverter-arm64-apple-macosx15.0-debug.exe>","<FlacConverter-arm64-apple-macosx15.0-debug.module>"]
+  "test": ["<FlacConverter-arm64-apple-macosx15.0-debug.exe>","<FlacConverter-arm64-apple-macosx15.0-debug.module>"]
+default: "main"
+nodes:
+  "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/Sources/FlacConverter/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+  "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter":
+    is-mutated: true
+commands:
+  "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter-entitlement.plist":
+    tool: write-auxiliary-file
+    inputs: ["<entitlement-plist>","<com.apple.security.get-task-allow>"]
+    outputs: ["/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter-entitlement.plist"]
+    description: "Write auxiliary file /Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter-entitlement.plist"
+
+  "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/Sources/FlacConverter/ConentView.swift","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/Sources/FlacConverter/FlacConverterApp.swift"]
+    outputs: ["/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.build/sources"]
+    description: "Write auxiliary file /Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.build/sources"
+
+  "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.product/Objects.LinkFileList":
+    tool: write-auxiliary-file
+    inputs: ["<link-file-list>","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.build/ConentView.swift.o","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.build/FlacConverterApp.swift.o"]
+    outputs: ["/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.product/Objects.LinkFileList"]
+    description: "Write auxiliary file /Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.product/Objects.LinkFileList"
+
+  "/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt":
+    tool: write-auxiliary-file
+    inputs: ["<swift-get-version>","/Library/Developer/CommandLineTools/usr/bin/swiftc"]
+    outputs: ["/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"]
+    always-out-of-date: "true"
+    description: "Write auxiliary file /Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"
+
+  "<FlacConverter-arm64-apple-macosx15.0-debug.exe>":
+    tool: phony
+    inputs: ["<FlacConverter-arm64-apple-macosx15.0-debug.exe-CodeSigning>"]
+    outputs: ["<FlacConverter-arm64-apple-macosx15.0-debug.exe>"]
+
+  "<FlacConverter-arm64-apple-macosx15.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.build/ConentView.swift.o","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.build/FlacConverterApp.swift.o","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/Modules/FlacConverter.swiftmodule"]
+    outputs: ["<FlacConverter-arm64-apple-macosx15.0-debug.module>"]
+
+  "C.FlacConverter-arm64-apple-macosx15.0-debug.exe":
+    tool: shell
+    inputs: ["/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.build/ConentView.swift.o","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.build/FlacConverterApp.swift.o","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.product/Objects.LinkFileList"]
+    outputs: ["/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter"]
+    description: "Linking ./.build/arm64-apple-macosx/debug/FlacConverter"
+    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-L","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug","-o","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter","-module-name","FlacConverter","-Xlinker","-no_warn_duplicate_libraries","-emit-executable","-Xlinker","-alias","-Xlinker","_FlacConverter_main","-Xlinker","_main","-Xlinker","-rpath","-Xlinker","@loader_path","@/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.product/Objects.LinkFileList","-Xlinker","-rpath","-Xlinker","/Library/Developer/CommandLineTools/usr/lib/swift-6.2/macosx","-target","arm64-apple-macosx13.0","-Xlinker","-add_ast_path","-Xlinker","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/Modules/FlacConverter.swiftmodule","-I","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-L","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-plugin-path","/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g"]
+
+  "C.FlacConverter-arm64-apple-macosx15.0-debug.exe-entitlements":
+    tool: shell
+    inputs: ["/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter-entitlement.plist"]
+    outputs: ["<FlacConverter-arm64-apple-macosx15.0-debug.exe-CodeSigning>"]
+    description: "Applying debug entitlements to ./.build/arm64-apple-macosx/debug/FlacConverter"
+    args: ["codesign","--force","--sign","-","--entitlements","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter-entitlement.plist","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter"]
+
+  "C.FlacConverter-arm64-apple-macosx15.0-debug.module":
+    tool: shell
+    inputs: ["/Users/richardslade/SourceCode/FlacConverter/FlacConverter/Sources/FlacConverter/ConentView.swift","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/Sources/FlacConverter/FlacConverterApp.swift","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.build/sources"]
+    outputs: ["/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.build/ConentView.swift.o","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.build/FlacConverterApp.swift.o","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/Modules/FlacConverter.swiftmodule"]
+    description: "Compiling Swift Module 'FlacConverter' (2 sources)"
+    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-module-name","FlacConverter","-emit-dependencies","-emit-module","-emit-module-path","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/Modules/FlacConverter.swiftmodule","-output-file-map","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.build/output-file-map.json","-incremental","-c","@/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/FlacConverter.build/sources","-I","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx13.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j12","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-Xfrontend","-entry-point-function-name","-Xfrontend","FlacConverter_main","-color-diagnostics","-swift-version","5","-I","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-L","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-plugin-path","/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g","-Xcc","-isysroot","-Xcc","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-Xcc","-fPIC","-Xcc","-g","-package-name","flacconverter"]
+
+  "PackageStructure":
+    tool: package-structure-tool
+    inputs: ["/Users/richardslade/SourceCode/FlacConverter/FlacConverter/Sources/FlacConverter/","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/Package.swift","/Users/richardslade/SourceCode/FlacConverter/FlacConverter/Package.resolved"]
+    outputs: ["<PackageStructure>"]
+    description: "Planning build"
+    allow-missing-inputs: true
+
