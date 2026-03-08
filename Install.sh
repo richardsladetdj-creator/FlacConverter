@@ -28,6 +28,11 @@ mkdir -p "$RES_DIR"
 
 cp "$BIN_PATH" "$MACOS_DIR/$APP_NAME"
 
+echo "== Download yt-dlp =="
+curl -fL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos" \
+  -o "$MACOS_DIR/yt-dlp"
+chmod +x "$MACOS_DIR/yt-dlp"
+
 # Copy icon if present
 if [[ -f "$ROOT_DIR/icon.icns" ]]; then
   cp "$ROOT_DIR/icon.icns" "$RES_DIR/icon.icns"
@@ -77,4 +82,6 @@ cp -R "$APP_DIR" "$DEST"
 
 echo "Installed: $DEST"
 echo "Launching..."
+pkill -x "FlacConverter" 2>/dev/null || true
+sleep 0.5
 open "$DEST"

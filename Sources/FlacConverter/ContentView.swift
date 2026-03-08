@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import AVFoundation
 
 struct ContentView: View {
     // Settings (controlled by SettingsView via @AppStorage)
@@ -30,12 +31,16 @@ struct ContentView: View {
     @State private var lastLogURL: URL? = nil
     @State private var lastOutputFolderURL: URL? = nil
 
+    @State private var youtubeURL = ""
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
 
             header
 
             GroupBox { dropZone }
+
+            GroupBox { youtubeSection }
 
             GroupBox { progressAndStats }
 
@@ -46,7 +51,7 @@ struct ContentView: View {
             footer
         }
         .padding(16)
-        .frame(width: 760, height: 390)
+        .frame(width: 760, height: 490)
     }
 
     // MARK: - UI
@@ -112,6 +117,28 @@ struct ContentView: View {
             Task { await handleDrop(providers: providers) }
             return true
         }
+    }
+
+    private var youtubeSection: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "music.note")
+                .foregroundStyle(.secondary)
+                .frame(width: 20)
+
+            TextField("YouTube URL  (e.g. https://youtube.com/watch?v=…)", text: $youtubeURL)
+                .textFieldStyle(.roundedBorder)
+                .disabled(isRunning)
+                .onSubmit {
+                    guard !youtubeURL.trimmingCharacters(in: .whitespaces).isEmpty, !isRunning else { return }
+                    Task { await downloadFromYouTube() }
+                }
+
+            Button("Download") {
+                Task { await downloadFromYouTube() }
+            }
+            .disabled(youtubeURL.trimmingCharacters(in: .whitespaces).isEmpty || isRunning)
+        }
+        .padding(.vertical, 4)
     }
 
     private var hintText: String {
@@ -454,6 +481,197 @@ struct ContentView: View {
             defer { try? handle.close() }
             do { try handle.seekToEnd() } catch { }
             do { try handle.write(contentsOf: data) } catch { }
+        }
+    }
+
+    // MARK: - YouTube Download
+
+    private func findYtDlp() -> URL? {
+        // Bundled binary (installed .app via Install.sh)
+        if let bundled = Bundle.main.executableURL?
+            .deletingLastPathComponent()
+            .appendingPathComponent("yt-dlp"),
+           FileManager.default.fileExists(atPath: bundled.path) {
+            return bundled
+        }
+        // Fallback: Homebrew (development builds via swift run)
+        return ["/opt/homebrew/bin/yt-dlp", "/usr/local/bin/yt-dlp"]
+            .map { URL(fileURLWithPath: $0) }
+            .first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    private func downloadFromYouTube() async {
+        let rawURL = youtubeURL.trimmingCharacters(in: .whitespaces)
+        guard !rawURL.isEmpty else { return }
+
+        guard let ytDlp = findYtDlp() else {
+            errorText = "yt-dlp not found. Install it with: brew install yt-dlp"
+            return
+        }
+
+        isRunning = true
+        errorText = nil
+
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+        let log = downloads.appendingPathComponent("yt-download.log")
+        lastLogURL = log
+        writeLog("=== YouTube download: \(rawURL)\n", to: log)
+
+        // Step 1: Get the video title
+        status = "Fetching video title…"
+        let titleProc = Process()
+        titleProc.executableURL = ytDlp
+        titleProc.arguments = ["--skip-download", "--print", "title", "--no-playlist", rawURL]
+        let titlePipe = Pipe()
+        let titleErrPipe = Pipe()
+        titleProc.standardOutput = titlePipe
+        titleProc.standardError = titleErrPipe
+
+        do { try titleProc.run() } catch {
+            writeLog("ERROR launching yt-dlp (title): \(error)\n", to: log)
+            errorText = "Failed to launch yt-dlp: \(error.localizedDescription)"
+            isRunning = false
+            return
+        }
+        titleProc.waitUntilExit()
+
+        let titleData = titlePipe.fileHandleForReading.readDataToEndOfFile()
+        let titleErrData = titleErrPipe.fileHandleForReading.readDataToEndOfFile()
+        if !titleErrData.isEmpty { writeLog(String(decoding: titleErrData, as: UTF8.self), to: log) }
+        writeLog(String(decoding: titleData, as: UTF8.self), to: log)
+
+        guard titleProc.terminationStatus == 0 else {
+            errorText = "yt-dlp could not fetch the video title (exit \(titleProc.terminationStatus)). Check the URL."
+            isRunning = false
+            return
+        }
+
+        let rawTitle = String(decoding: titleData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        let illegalChars = CharacterSet(charactersIn: #"/\:*?"<>|"#)
+        let safeTitle = rawTitle.components(separatedBy: illegalChars).joined(separator: "_")
+        let finalTitle = safeTitle.isEmpty ? "YouTube_Audio" : safeTitle
+
+        // Step 2: Download best m4a audio to a temp file
+        status = "Downloading audio…"
+        let tmpDir = URL(fileURLWithPath: NSTemporaryDirectory())
+        let tmpTemplate = tmpDir.appendingPathComponent("flacconverter_%(id)s.%(ext)s").path
+
+        let dlProc = Process()
+        dlProc.executableURL = ytDlp
+        dlProc.arguments = ["-f", "bestaudio[ext=m4a]", "--no-playlist", "-o", tmpTemplate, rawURL]
+        let dlPipe = Pipe()
+        dlProc.standardOutput = dlPipe
+        dlProc.standardError = dlPipe
+
+        do { try dlProc.run() } catch {
+            writeLog("ERROR launching yt-dlp (download): \(error)\n", to: log)
+            errorText = "Failed to launch yt-dlp download: \(error.localizedDescription)"
+            isRunning = false
+            return
+        }
+        dlProc.waitUntilExit()
+
+        let dlOutput = String(decoding: dlPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        writeLog(dlOutput, to: log)
+
+        // Parse the downloaded file path from yt-dlp output
+        var tempFile: URL? = nil
+        for line in dlOutput.components(separatedBy: .newlines) {
+            if line.contains("Destination:") {
+                if let pathPart = line.components(separatedBy: "Destination:").last?.trimmingCharacters(in: .whitespaces),
+                   !pathPart.isEmpty {
+                    tempFile = URL(fileURLWithPath: pathPart)
+                    break
+                }
+            }
+            // Handle "has already been downloaded" (yt-dlp skips re-download of existing temp file)
+            if tempFile == nil, line.contains("has already been downloaded") {
+                let trimmed = line.replacingOccurrences(of: "[download]", with: "").trimmingCharacters(in: .whitespaces)
+                if let range = trimmed.range(of: " has already been downloaded") {
+                    tempFile = URL(fileURLWithPath: String(trimmed[trimmed.startIndex..<range.lowerBound]))
+                    break
+                }
+            }
+        }
+
+        if dlProc.terminationStatus != 0 || tempFile == nil {
+            errorText = "No m4a audio stream found for this video. The video may not have an AAC/m4a stream."
+            status = "Download failed."
+            isRunning = false
+            return
+        }
+
+        guard let srcFile = tempFile, FileManager.default.fileExists(atPath: srcFile.path) else {
+            errorText = "Downloaded file not found at expected temp path. See yt-download.log."
+            isRunning = false
+            return
+        }
+
+        // Step 3: Remux DASH m4a → standard m4a (required for Apple Music playback)
+        status = "Processing audio…"
+        var outFile = downloads.appendingPathComponent(finalTitle).appendingPathExtension("m4a")
+
+        if FileManager.default.fileExists(atPath: outFile.path) {
+            switch existingPolicy {
+            case .skip:
+                writeLog("SKIP (exists): \(outFile.path)\n", to: log)
+                try? FileManager.default.removeItem(at: srcFile)
+                status = "Skipped — file already exists in Downloads."
+                lastOutputFolderURL = downloads
+                youtubeURL = ""
+                isRunning = false
+                return
+            case .overwrite:
+                writeLog("OVERWRITE: \(outFile.path)\n", to: log)
+                try? FileManager.default.removeItem(at: outFile)
+            case .rename:
+                outFile = nextAvailableName(for: outFile)
+                writeLog("RENAME -> \(outFile.lastPathComponent)\n", to: log)
+            }
+        }
+
+        writeLog("REMUX: \(srcFile.path) -> \(outFile.path)\n", to: log)
+        do {
+            try await remuxToM4A(src: srcFile, dst: outFile)
+        } catch {
+            writeLog("ERROR remuxing: \(error)\n", to: log)
+            try? FileManager.default.removeItem(at: srcFile)
+            errorText = "Failed to process audio: \(error.localizedDescription)"
+            isRunning = false
+            return
+        }
+        try? FileManager.default.removeItem(at: srcFile)
+        writeLog("DELETED temp: \(srcFile.path)\n", to: log)
+
+        writeLog("SUCCESS: \(outFile.path)\n", to: log)
+        lastOutputFolderURL = downloads
+        status = "Saved: \(outFile.lastPathComponent)"
+        youtubeURL = ""
+        isRunning = false
+    }
+
+    private func remuxToM4A(src: URL, dst: URL) async throws {
+        let asset = AVURLAsset(url: src)
+
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
+            throw NSError(
+                domain: "FlacConverter", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Could not create export session for downloaded audio."]
+            )
+        }
+        session.outputURL = dst
+        session.outputFileType = .m4a
+
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            session.exportAsynchronously { cont.resume() }
+        }
+
+        if session.status != .completed {
+            let msg = session.error?.localizedDescription ?? "Unknown export error"
+            throw NSError(
+                domain: "FlacConverter", code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Audio remux failed: \(msg)"]
+            )
         }
     }
 }
