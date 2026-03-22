@@ -32,6 +32,7 @@ struct ContentView: View {
     @State private var lastOutputFolderURL: URL? = nil
 
     @State private var youtubeURL = ""
+    @State private var downloadProgress: Double? = nil   // nil = use file-based progress bar
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -150,8 +151,13 @@ struct ContentView: View {
 
     private var progressAndStats: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ProgressView(value: total == 0 ? 0 : Double(processed + skipped + failed), total: Double(max(total, 1)))
-                .controlSize(.large)
+            if let dp = downloadProgress {
+                ProgressView(value: dp, total: 1.0)
+                    .controlSize(.large)
+            } else {
+                ProgressView(value: total == 0 ? 0 : Double(processed + skipped + failed), total: Double(max(total, 1)))
+                    .controlSize(.large)
+            }
 
             HStack {
                 statChip(title: "Total", value: "\(total)")
@@ -244,6 +250,7 @@ struct ContentView: View {
         failed = 0
         lastLogURL = nil
         lastOutputFolderURL = nil
+        downloadProgress = nil
     }
 
     // MARK: - Drop handling
@@ -425,19 +432,20 @@ struct ContentView: View {
         proc.standardOutput = pipe
         proc.standardError = pipe
 
-        try proc.run()
-        proc.waitUntilExit()
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        // Read pipe concurrently with process to avoid blocking the main thread
+        // and to prevent pipe-buffer deadlocks on large output.
+        let pipeReadTask = Task.detached { [pipe] in pipe.fileHandleForReading.readDataToEndOfFile() }
+        let exitStatus = try await runProcess(proc)
+        let data = await pipeReadTask.value
         if !data.isEmpty {
             writeLog(String(decoding: data, as: UTF8.self), to: log)
         }
 
-        if proc.terminationStatus != 0 {
-            writeLog("ERROR: afconvert exited with \(proc.terminationStatus)\n", to: log)
+        if exitStatus != 0 {
+            writeLog("ERROR: afconvert exited with \(exitStatus)\n", to: log)
             throw NSError(
                 domain: "afconvert",
-                code: Int(proc.terminationStatus),
+                code: Int(exitStatus),
                 userInfo: [NSLocalizedDescriptionKey: "afconvert failed on \(file.lastPathComponent). See convert.log in that folder."]
             )
         }
@@ -484,6 +492,20 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Process helpers
+
+    /// Runs `proc` (which must already be configured) and suspends until it exits,
+    /// without blocking the calling thread. Safe to call on @MainActor.
+    private func runProcess(_ proc: Process) async throws -> Int32 {
+        try await withCheckedThrowingContinuation { cont in
+            proc.terminationHandler = { p in cont.resume(returning: p.terminationStatus) }
+            do { try proc.run() } catch {
+                proc.terminationHandler = nil
+                cont.resume(throwing: error)
+            }
+        }
+    }
+
     // MARK: - YouTube Download
 
     private func findYtDlp() -> URL? {
@@ -498,6 +520,39 @@ struct ContentView: View {
         return ["/opt/homebrew/bin/yt-dlp", "/usr/local/bin/yt-dlp"]
             .map { URL(fileURLWithPath: $0) }
             .first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    private func findFFmpeg() -> URL? {
+        if let bundled = Bundle.main.executableURL?
+            .deletingLastPathComponent()
+            .appendingPathComponent("ffmpeg"),
+           FileManager.default.fileExists(atPath: bundled.path) {
+            return bundled
+        }
+        return ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+            .map { URL(fileURLWithPath: $0) }
+            .first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    private func findFFprobe() -> URL? {
+        if let bundled = Bundle.main.executableURL?
+            .deletingLastPathComponent()
+            .appendingPathComponent("ffprobe"),
+           FileManager.default.fileExists(atPath: bundled.path) {
+            return bundled
+        }
+        return ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"]
+            .map { URL(fileURLWithPath: $0) }
+            .first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    private func validateAudioFile(_ url: URL) async -> Bool {
+        let asset = AVURLAsset(url: url)
+        let audioTracks = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
+        guard !audioTracks.isEmpty else { return false }
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? Int, size > 1024 else { return false }
+        return true
     }
 
     private func downloadFromYouTube() async {
@@ -527,51 +582,117 @@ struct ContentView: View {
         titleProc.standardOutput = titlePipe
         titleProc.standardError = titleErrPipe
 
-        do { try titleProc.run() } catch {
+        // Start draining pipes concurrently to prevent pipe-buffer deadlocks
+        // and keep the main thread responsive.
+        let titleReadTask = Task.detached { [titlePipe] in titlePipe.fileHandleForReading.readDataToEndOfFile() }
+        let titleErrReadTask = Task.detached { [titleErrPipe] in titleErrPipe.fileHandleForReading.readDataToEndOfFile() }
+
+        let titleExitCode: Int32
+        do {
+            titleExitCode = try await runProcess(titleProc)
+        } catch {
             writeLog("ERROR launching yt-dlp (title): \(error)\n", to: log)
             errorText = "Failed to launch yt-dlp: \(error.localizedDescription)"
             isRunning = false
             return
         }
-        titleProc.waitUntilExit()
 
-        let titleData = titlePipe.fileHandleForReading.readDataToEndOfFile()
-        let titleErrData = titleErrPipe.fileHandleForReading.readDataToEndOfFile()
+        let titleData = await titleReadTask.value
+        let titleErrData = await titleErrReadTask.value
         if !titleErrData.isEmpty { writeLog(String(decoding: titleErrData, as: UTF8.self), to: log) }
         writeLog(String(decoding: titleData, as: UTF8.self), to: log)
 
-        guard titleProc.terminationStatus == 0 else {
-            errorText = "yt-dlp could not fetch the video title (exit \(titleProc.terminationStatus)). Check the URL."
+        guard titleExitCode == 0 else {
+            errorText = "yt-dlp could not fetch the video title (exit \(titleExitCode)). Check the URL."
             isRunning = false
             return
         }
 
         let rawTitle = String(decoding: titleData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        let illegalChars = CharacterSet(charactersIn: #"/\:*?"<>|"#)
+        let illegalChars = CharacterSet(charactersIn: "/\\:*?\"<>|#")
         let safeTitle = rawTitle.components(separatedBy: illegalChars).joined(separator: "_")
         let finalTitle = safeTitle.isEmpty ? "YouTube_Audio" : safeTitle
 
-        // Step 2: Download best m4a audio to a temp file
-        status = "Downloading audio…"
+        // Step 2: Download best available audio/video to a temp file
+        status = "Downloading…"
         let tmpDir = URL(fileURLWithPath: NSTemporaryDirectory())
         let tmpTemplate = tmpDir.appendingPathComponent("flacconverter_%(id)s.%(ext)s").path
 
+        let ffmpeg = findFFmpeg()
+        let hasFFmpeg = ffmpeg != nil
+
         let dlProc = Process()
         dlProc.executableURL = ytDlp
-        dlProc.arguments = ["-f", "bestaudio[ext=m4a]", "--no-playlist", "-o", tmpTemplate, rawURL]
+        // Always download without -x; we handle audio extraction ourselves.
+        // Prefer audio-only streams; fall back to best muxed format for sites
+        // like TikTok that don't offer separate audio.
+        dlProc.arguments = ["-f", "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=webm]/bestaudio/best[ext=mp4]/best",
+                            "--no-playlist", "-o", tmpTemplate, rawURL]
         let dlPipe = Pipe()
         dlProc.standardOutput = dlPipe
         dlProc.standardError = dlPipe
 
-        do { try dlProc.run() } catch {
+        // Stream output in real time so the progress bar reflects actual download %.
+        // yt-dlp writes lines like: [download]  45.7% of 5.23MiB at 2.34MiB/s ETA 00:01
+        downloadProgress = 0.0
+        // Accumulate output on a serial queue so it's safe to read after the process exits.
+        let dlOutputQueue = DispatchQueue(label: "flacconverter.ytdlp-output")
+        var dlOutputChunks: [String] = []
+        // Track last update time on the same serial queue that accumulates output,
+        // so access is thread-safe without a lock.
+        var lastProgressDate = Date.distantPast
+
+        dlPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            let text = String(decoding: data, as: UTF8.self)
+
+            // Parse progress before hopping to the serial queue so we can
+            // throttle without extra queue hops for lines we'll skip.
+            var bestProgress: Double? = nil
+            for line in text.components(separatedBy: .newlines) {
+                guard line.hasPrefix("[download]") else { continue }
+                let tokens = line.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+                guard tokens.count >= 2, tokens[1].hasSuffix("%"),
+                      let pct = Double(tokens[1].dropLast()) else { continue }
+                bestProgress = min(pct / 100.0, 1.0)
+            }
+
+            dlOutputQueue.async {
+                dlOutputChunks.append(text)
+
+                // Throttle UI updates to avoid overwhelming the main thread.
+                if let progress = bestProgress {
+                    let now = Date()
+                    if progress >= 1.0 || now.timeIntervalSince(lastProgressDate) >= 0.15 {
+                        lastProgressDate = now
+                        DispatchQueue.main.async {
+                            self.downloadProgress = progress
+                            self.status = "Downloading… \(Int(progress * 100))%"
+                        }
+                    }
+                }
+            }
+        }
+
+        let dlExitCode: Int32
+        do {
+            dlExitCode = try await runProcess(dlProc)
+        } catch {
+            dlPipe.fileHandleForReading.readabilityHandler = nil
+            downloadProgress = nil
             writeLog("ERROR launching yt-dlp (download): \(error)\n", to: log)
             errorText = "Failed to launch yt-dlp download: \(error.localizedDescription)"
             isRunning = false
             return
         }
-        dlProc.waitUntilExit()
+        dlPipe.fileHandleForReading.readabilityHandler = nil
+        downloadProgress = nil
 
-        let dlOutput = String(decoding: dlPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        // Drain any remaining queued chunks before reading output.
+        let dlOutput: String = await withCheckedContinuation { cont in
+            dlOutputQueue.async { cont.resume(returning: dlOutputChunks.joined()) }
+        }
         writeLog(dlOutput, to: log)
 
         // Parse the downloaded file path from yt-dlp output
@@ -584,7 +705,6 @@ struct ContentView: View {
                     break
                 }
             }
-            // Handle "has already been downloaded" (yt-dlp skips re-download of existing temp file)
             if tempFile == nil, line.contains("has already been downloaded") {
                 let trimmed = line.replacingOccurrences(of: "[download]", with: "").trimmingCharacters(in: .whitespaces)
                 if let range = trimmed.range(of: " has already been downloaded") {
@@ -594,8 +714,8 @@ struct ContentView: View {
             }
         }
 
-        if dlProc.terminationStatus != 0 || tempFile == nil {
-            errorText = "No m4a audio stream found for this video. The video may not have an AAC/m4a stream."
+        if dlExitCode != 0 || tempFile == nil {
+            errorText = "Could not download audio. The video may be unavailable, private, or in an unsupported format. Check yt-download.log for details."
             status = "Download failed."
             isRunning = false
             return
@@ -607,9 +727,10 @@ struct ContentView: View {
             return
         }
 
-        // Step 3: Remux DASH m4a → standard m4a (required for Apple Music playback)
-        status = "Processing audio…"
-        var outFile = downloads.appendingPathComponent(finalTitle).appendingPathExtension("m4a")
+        // Step 3: Extract audio and produce Music.app-compatible file
+        status = "Extracting audio…"
+        let outputExt = hasFFmpeg ? "mp3" : "m4a"
+        var outFile = downloads.appendingPathComponent(finalTitle).appendingPathExtension(outputExt)
 
         if FileManager.default.fileExists(atPath: outFile.path) {
             switch existingPolicy {
@@ -630,18 +751,68 @@ struct ContentView: View {
             }
         }
 
-        writeLog("REMUX: \(srcFile.path) -> \(outFile.path)\n", to: log)
-        do {
-            try await remuxToM4A(src: srcFile, dst: outFile)
-        } catch {
-            writeLog("ERROR remuxing: \(error)\n", to: log)
-            try? FileManager.default.removeItem(at: srcFile)
-            errorText = "Failed to process audio: \(error.localizedDescription)"
-            isRunning = false
-            return
+        if hasFFmpeg, let ffmpegURL = ffmpeg {
+            // Use ffmpeg to extract audio as MP3 (universally compatible)
+            writeLog("FFMPEG: \(srcFile.path) -> \(outFile.path)\n", to: log)
+            let proc = Process()
+            proc.executableURL = ffmpegURL
+            proc.arguments = ["-i", srcFile.path,
+                              "-vn",               // drop video
+                              "-acodec", "libmp3lame",
+                              "-q:a", "2",         // high quality VBR (~190kbps)
+                              "-y",                // overwrite
+                              outFile.path]
+            let ffPipe = Pipe()
+            proc.standardOutput = ffPipe
+            proc.standardError = ffPipe
+            // Read pipe concurrently to avoid blocking the main thread and pipe-buffer deadlocks.
+            let ffReadTask = Task.detached { [ffPipe] in ffPipe.fileHandleForReading.readDataToEndOfFile() }
+            let ffExitCode: Int32
+            do {
+                ffExitCode = try await runProcess(proc)
+            } catch {
+                writeLog("ERROR launching ffmpeg: \(error)\n", to: log)
+                try? FileManager.default.removeItem(at: srcFile)
+                errorText = "Failed to launch ffmpeg: \(error.localizedDescription)"
+                isRunning = false
+                return
+            }
+            let ffOutput = String(decoding: await ffReadTask.value, as: UTF8.self)
+            writeLog(ffOutput, to: log)
+            if ffExitCode != 0 {
+                try? FileManager.default.removeItem(at: srcFile)
+                errorText = "ffmpeg audio extraction failed (exit \(ffExitCode)). Check yt-download.log."
+                isRunning = false
+                return
+            }
+        } else {
+            // No ffmpeg: remux via AVAssetExportSession / avconvert (works for YouTube DASH m4a)
+            writeLog("REMUX: \(srcFile.path) -> \(outFile.path)\n", to: log)
+            do {
+                try await remuxToM4A(src: srcFile, dst: outFile)
+            } catch {
+                writeLog("ERROR remuxing: \(error)\n", to: log)
+                try? FileManager.default.removeItem(at: srcFile)
+                errorText = "Failed to process audio: \(error.localizedDescription)"
+                isRunning = false
+                return
+            }
         }
         try? FileManager.default.removeItem(at: srcFile)
         writeLog("DELETED temp: \(srcFile.path)\n", to: log)
+
+        // Validate the output file actually contains audio
+        if !(await validateAudioFile(outFile)) {
+            writeLog("ERROR: output file has no audio tracks or is too small: \(outFile.path)\n", to: log)
+            try? FileManager.default.removeItem(at: outFile)
+            if !hasFFmpeg {
+                errorText = "Conversion produced no audio. Install ffmpeg (brew install ffmpeg) to enable audio extraction from video sources."
+            } else {
+                errorText = "Conversion produced no audio. The source may not contain an audio track. Check yt-download.log for details."
+            }
+            isRunning = false
+            return
+        }
 
         writeLog("SUCCESS: \(outFile.path)\n", to: log)
         lastOutputFolderURL = downloads
@@ -651,6 +822,35 @@ struct ContentView: View {
     }
 
     private func remuxToM4A(src: URL, dst: URL) async throws {
+        if src.pathExtension.lowercased() != "m4a" {
+            // Video+audio sources (e.g. TikTok mp4): use /usr/bin/avconvert.
+            // AVAssetExportSession called from within the app fails silently on video
+            // sources due to the h265 decoder running in a sandboxed XPC service that
+            // cannot write to ~/Downloads. avconvert runs as its own process and
+            // produces a proper audio-only m4a identical to what the CLI test produces.
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/avconvert")
+            proc.arguments = ["--preset", "PresetAppleM4A",
+                              "--source", src.path,
+                              "--output", dst.path,
+                              "--replace"]
+            let pipe = Pipe()
+            proc.standardOutput = pipe
+            proc.standardError = pipe
+            let avReadTask = Task.detached { [pipe] in pipe.fileHandleForReading.readDataToEndOfFile() }
+            let exitCode = try await runProcess(proc)
+            guard exitCode == 0 else {
+                let out = String(decoding: await avReadTask.value, as: UTF8.self)
+                throw NSError(
+                    domain: "FlacConverter", code: 7,
+                    userInfo: [NSLocalizedDescriptionKey: "avconvert failed: \(out)"]
+                )
+            }
+            return
+        }
+
+        // m4a source (YouTube DASH): remux via AVAssetExportSession to produce a
+        // standard m4a that Apple Music accepts.
         let asset = AVURLAsset(url: src)
 
         guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
@@ -670,7 +870,7 @@ struct ContentView: View {
             let msg = session.error?.localizedDescription ?? "Unknown export error"
             throw NSError(
                 domain: "FlacConverter", code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "Audio remux failed: \(msg)"]
+                userInfo: [NSLocalizedDescriptionKey: "Audio export failed: \(msg)"]
             )
         }
     }

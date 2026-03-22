@@ -27,7 +27,7 @@ Three Swift source files in `Sources/FlacConverter/`:
 | `ContentView.swift` | All conversion logic, drag-and-drop handling, YouTube download pipeline, UI state |
 | `SettingsView.swift` | Settings form UI, shared policy enums |
 
-**Pattern:** SwiftUI state-driven. No separate ViewModel objects — `ContentView` is large by design (~460 lines) and uses extracted computed-property subviews (`header`, `dropZone`, `youtubeSection`, `progressAndStats`, `footer`) for organisation.
+**Pattern:** SwiftUI state-driven. No separate ViewModel objects — `ContentView` is large by design (~860 lines) and uses extracted computed-property subviews (`header`, `dropZone`, `youtubeSection`, `progressAndStats`, `footer`) for organisation.
 
 **Settings persistence:** `@AppStorage` (UserDefaults). Policy enums defined in `SettingsView.swift` are imported by `ContentView` via computed properties:
 
@@ -53,6 +53,8 @@ private var existingPolicy: ExistingFilePolicy {
 - **Subviews:** Extracted as `private var` computed properties returning `some View`, kept within `ContentView`.
 - **File I/O:** `FileManager.default` throughout. Always check for file existence before acting.
 - **Async:** Drop handling uses `async`/`await`. Conversion runs on a background thread to keep UI responsive.
+- **Pipe I/O:** All `readDataToEndOfFile()` calls run on detached background tasks (`Task.detached`) started *before* `runProcess` to avoid blocking the main thread and to prevent pipe-buffer deadlocks when a process produces large output.
+- **Progress throttling:** yt-dlp download progress updates are throttled (~6–7 Hz via 0.15 s guard) to avoid overwhelming the main thread with rapid SwiftUI re-renders.
 - **Error handling:** Throw `NSError` with localized descriptions; catch at the call site and surface via `errorBanner`.
 - **No external dependencies:** Keep it that way. Leverage macOS system tools and frameworks only.
 
@@ -67,14 +69,22 @@ private var existingPolicy: ExistingFilePolicy {
 
 A second input method added to the UI between the drop zone and progress section. The user pastes a YouTube URL and clicks **Download** (or presses Return).
 
-**Pipeline:** `yt-dlp --skip-download --print title` → sanitize title → `yt-dlp -f "bestaudio[ext=m4a]"` (downloads AAC m4a to `/tmp/`) → `AVAssetExportSession` with `AVAssetExportPresetAppleM4A` (remuxes to standard m4a for Apple Music compatibility) → saves to `~/Downloads/<title>.m4a` → deletes temp file.
+**Pipeline (two-tier):**
 
-**Dependency:** `yt-dlp` must be installed (`brew install yt-dlp`). The app checks `/opt/homebrew/bin/yt-dlp` and `/usr/local/bin/yt-dlp` at runtime and surfaces a clear error if not found. No `ffmpeg` required.
+1. `yt-dlp --skip-download --print title` → sanitize title
+2. **With ffmpeg:** `yt-dlp -x --audio-format m4a --ffmpeg-location <dir>` extracts audio from any source (YouTube, TikTok, etc.) → remux via `AVAssetExportSession` or `avconvert` → saves to `~/Downloads/<title>.m4a`
+3. **Without ffmpeg:** `yt-dlp -f "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=webm]/bestaudio"` downloads audio-only streams only → remux → saves to `~/Downloads/<title>.m4a`. Sites without separate audio streams (e.g. TikTok) will fail with a message guiding the user to install ffmpeg.
+
+**Dependencies:**
+- `yt-dlp` (required) — `brew install yt-dlp`
+- `ffmpeg` (optional, recommended) — `brew install ffmpeg`. Required for sites like TikTok that don't offer audio-only streams. The app checks `/opt/homebrew/bin/ffmpeg` and `/usr/local/bin/ffmpeg` at runtime.
 
 **Key functions in ContentView.swift:**
 - `findYtDlp() -> URL?` — locates yt-dlp (bundled in .app bundle first, then Homebrew fallback)
+- `findFFmpeg() -> URL?` — locates ffmpeg (same search pattern as yt-dlp)
 - `downloadFromYouTube()` — full async pipeline (in `// MARK: - YouTube Download`)
-- `remuxToM4A(src:dst:)` — wraps `AVAssetExportSession` to remux DASH m4a → standard m4a
+- `remuxToM4A(src:dst:)` — wraps `AVAssetExportSession` or `avconvert` to produce standard m4a
+- `validateAudioFile(_:)` — checks output has audio tracks and non-trivial size
 - `youtubeSection` — the UI row (TextField + Button)
 
 **Log:** Written to `~/Downloads/yt-download.log`, surfaced by the existing "Open Last Log" button. Respects `existingPolicy` for the output file.
@@ -113,3 +123,4 @@ Add a computed property `private var mySection: some View` to `ContentView` and 
 - Do not split `ContentView` into a separate ViewModel class unless complexity clearly demands it; the current pattern is intentional.
 - Do not change the window size without updating all `.frame()` constraints consistently.
 - Do not swallow errors silently — always surface them via the `errorBanner` or log.
+- Do not call `readDataToEndOfFile()` on the main actor — always use `Task.detached` to read pipe data on a background thread. Start the read task *before* `runProcess` so the pipe drains concurrently with process execution.
