@@ -508,42 +508,28 @@ struct ContentView: View {
 
     // MARK: - YouTube Download
 
-    private func findYtDlp() -> URL? {
-        // Bundled binary (installed .app via Install.sh)
-        if let bundled = Bundle.main.executableURL?
-            .deletingLastPathComponent()
-            .appendingPathComponent("yt-dlp"),
-           FileManager.default.fileExists(atPath: bundled.path) {
-            return bundled
-        }
-        // Fallback: Homebrew (development builds via swift run)
-        return ["/opt/homebrew/bin/yt-dlp", "/usr/local/bin/yt-dlp"]
-            .map { URL(fileURLWithPath: $0) }
+    /// Locates a helper binary: bundled in the .app (Install.sh) first, then Homebrew (swift run).
+    private func findTool(_ name: String) -> URL? {
+        let bundleDir = Bundle.main.executableURL?.deletingLastPathComponent().path
+        return [bundleDir, "/opt/homebrew/bin", "/usr/local/bin"]
+            .compactMap { $0 }
+            .map { URL(fileURLWithPath: $0).appendingPathComponent(name) }
             .first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
-    private func findFFmpeg() -> URL? {
-        if let bundled = Bundle.main.executableURL?
-            .deletingLastPathComponent()
-            .appendingPathComponent("ffmpeg"),
-           FileManager.default.fileExists(atPath: bundled.path) {
-            return bundled
+    /// Args shared by every yt-dlp call. YouTube needs a JS runtime to solve its
+    /// signature challenges; without one yt-dlp falls back to clients that get HTTP 403.
+    private func ytDlpCommonArgs() -> [String] {
+        var args = ["--no-playlist"]
+        if let deno = findTool("deno") {
+            args += ["--js-runtimes", "deno:\(deno.path)"]
+        } else if let node = findTool("node") {
+            args += ["--js-runtimes", "node:\(node.path)"]
         }
-        return ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
-            .map { URL(fileURLWithPath: $0) }
-            .first { FileManager.default.fileExists(atPath: $0.path) }
-    }
-
-    private func findFFprobe() -> URL? {
-        if let bundled = Bundle.main.executableURL?
-            .deletingLastPathComponent()
-            .appendingPathComponent("ffprobe"),
-           FileManager.default.fileExists(atPath: bundled.path) {
-            return bundled
+        if let ffmpeg = findTool("ffmpeg") {
+            args += ["--ffmpeg-location", ffmpeg.path]
         }
-        return ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"]
-            .map { URL(fileURLWithPath: $0) }
-            .first { FileManager.default.fileExists(atPath: $0.path) }
+        return args
     }
 
     private func validateAudioFile(_ url: URL) async -> Bool {
@@ -559,7 +545,7 @@ struct ContentView: View {
         let rawURL = youtubeURL.trimmingCharacters(in: .whitespaces)
         guard !rawURL.isEmpty else { return }
 
-        guard let ytDlp = findYtDlp() else {
+        guard let ytDlp = findTool("yt-dlp") else {
             errorText = "yt-dlp not found. Install it with: brew install yt-dlp"
             return
         }
@@ -572,11 +558,25 @@ struct ContentView: View {
         lastLogURL = log
         writeLog("=== YouTube download: \(rawURL)\n", to: log)
 
+        // Step 0: Self-update yt-dlp. YouTube breaks old versions often. Non-fatal.
+        // ponytail: checks on every download (~1s); gate on binary mtime if that latency matters.
+        status = "Checking for yt-dlp updates…"
+        let updateProc = Process()
+        updateProc.executableURL = ytDlp
+        updateProc.arguments = ["-U"]
+        let updatePipe = Pipe()
+        updateProc.standardOutput = updatePipe
+        updateProc.standardError = updatePipe
+        let updateReadTask = Task.detached { [updatePipe] in updatePipe.fileHandleForReading.readDataToEndOfFile() }
+        let updateExitCode = (try? await runProcess(updateProc)) ?? -1
+        writeLog(String(decoding: await updateReadTask.value, as: UTF8.self), to: log)
+        if updateExitCode != 0 { writeLog("WARN: yt-dlp self-update failed (exit \(updateExitCode)), continuing\n", to: log) }
+
         // Step 1: Get the video title
         status = "Fetching video title…"
         let titleProc = Process()
         titleProc.executableURL = ytDlp
-        titleProc.arguments = ["--skip-download", "--print", "title", "--no-playlist", rawURL]
+        titleProc.arguments = ytDlpCommonArgs() + ["--skip-download", "--print", "title", rawURL]
         let titlePipe = Pipe()
         let titleErrPipe = Pipe()
         titleProc.standardOutput = titlePipe
@@ -618,7 +618,7 @@ struct ContentView: View {
         let tmpDir = URL(fileURLWithPath: NSTemporaryDirectory())
         let tmpTemplate = tmpDir.appendingPathComponent("flacconverter_%(id)s.%(ext)s").path
 
-        let ffmpeg = findFFmpeg()
+        let ffmpeg = findTool("ffmpeg")
         let hasFFmpeg = ffmpeg != nil
 
         let dlProc = Process()
@@ -626,8 +626,9 @@ struct ContentView: View {
         // Always download without -x; we handle audio extraction ourselves.
         // Prefer audio-only streams; fall back to best muxed format for sites
         // like TikTok that don't offer separate audio.
-        dlProc.arguments = ["-f", "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=webm]/bestaudio/best[ext=mp4]/best",
-                            "--no-playlist", "-o", tmpTemplate, rawURL]
+        dlProc.arguments = ytDlpCommonArgs() + [
+            "-f", "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=webm]/bestaudio/best[ext=mp4]/best",
+            "-o", tmpTemplate, rawURL]
         let dlPipe = Pipe()
         dlProc.standardOutput = dlPipe
         dlProc.standardError = dlPipe
@@ -715,7 +716,9 @@ struct ContentView: View {
         }
 
         if dlExitCode != 0 || tempFile == nil {
-            errorText = "Could not download audio. The video may be unavailable, private, or in an unsupported format. Check yt-download.log for details."
+            errorText = dlOutput.contains("HTTP Error 403")
+                ? "YouTube blocked the download (HTTP 403). Re-run Install.sh to refresh yt-dlp and deno, then try again."
+                : "Could not download audio. The video may be unavailable, private, or in an unsupported format. Check yt-download.log for details."
             status = "Download failed."
             isRunning = false
             return

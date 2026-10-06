@@ -11,7 +11,7 @@ Lightweight drag-and-drop macOS utility for converting FLAC files to Apple Lossl
 - FLAC → ALAC (.m4a) conversion using macOS built-in `afconvert` — no external dependencies
 - Drag & drop files or folders onto the app window
 - Outputs converted files into the same folder as the source
-- YouTube download: paste a URL and download audio directly as ALAC (requires `yt-dlp`)
+- YouTube download: paste a URL and save the audio to `~/Downloads` as MP3 (needs `yt-dlp`, `deno` and `ffmpeg`, which `Install.sh` bundles; without ffmpeg it saves .m4a)
 - Configurable policies (via Settings):
   - **Existing file:** skip / overwrite / rename
   - **On error:** stop / continue
@@ -23,7 +23,7 @@ Lightweight drag-and-drop macOS utility for converting FLAC files to Apple Lossl
 
 - macOS 13 (Ventura) or later
 - Xcode Command Line Tools
-- `yt-dlp` (optional, for YouTube downloads): `brew install yt-dlp`
+- For YouTube downloads in dev builds (`Install.sh` bundles these): `brew install yt-dlp deno ffmpeg`
 
 ## Build (macOS)
 

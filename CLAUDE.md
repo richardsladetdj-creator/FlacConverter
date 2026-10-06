@@ -69,19 +69,24 @@ private var existingPolicy: ExistingFilePolicy {
 
 A second input method added to the UI between the drop zone and progress section. The user pastes a YouTube URL and clicks **Download** (or presses Return).
 
-**Pipeline (two-tier):**
+**Pipeline:**
 
+0. `yt-dlp -U` self-update (non-fatal). YouTube breaks old yt-dlp versions often.
 1. `yt-dlp --skip-download --print title` → sanitize title
-2. **With ffmpeg:** `yt-dlp -x --audio-format m4a --ffmpeg-location <dir>` extracts audio from any source (YouTube, TikTok, etc.) → remux via `AVAssetExportSession` or `avconvert` → saves to `~/Downloads/<title>.m4a`
-3. **Without ffmpeg:** `yt-dlp -f "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=webm]/bestaudio"` downloads audio-only streams only → remux → saves to `~/Downloads/<title>.m4a`. Sites without separate audio streams (e.g. TikTok) will fail with a message guiding the user to install ffmpeg.
+2. `yt-dlp -f "bestaudio[ext=m4a]/.../best"` downloads to a temp file
+3. **With ffmpeg:** `ffmpeg -vn -acodec libmp3lame -q:a 2` → `~/Downloads/<title>.mp3`
+4. **Without ffmpeg:** remux via `AVAssetExportSession` / `avconvert` → `~/Downloads/<title>.m4a`
 
-**Dependencies:**
-- `yt-dlp` (required) — `brew install yt-dlp`
-- `ffmpeg` (optional, recommended) — `brew install ffmpeg`. Required for sites like TikTok that don't offer audio-only streams. The app checks `/opt/homebrew/bin/ffmpeg` and `/usr/local/bin/ffmpeg` at runtime.
+Every yt-dlp call gets `ytDlpCommonArgs()`: `--no-playlist`, `--js-runtimes deno:<path>` (falls back to node), and `--ffmpeg-location`. **YouTube needs a JS runtime.** Without one, yt-dlp falls back to clients whose streams return HTTP 403.
+
+**Dependencies** (Install.sh bundles all of them into `Contents/MacOS`; dev builds fall back to Homebrew):
+- `yt-dlp` (required): `brew install yt-dlp`
+- `deno` (required for YouTube): `brew install deno`
+- `ffmpeg` (recommended, needed for MP3 output and for TikTok): `brew install ffmpeg`
 
 **Key functions in ContentView.swift:**
-- `findYtDlp() -> URL?` — locates yt-dlp (bundled in .app bundle first, then Homebrew fallback)
-- `findFFmpeg() -> URL?` — locates ffmpeg (same search pattern as yt-dlp)
+- `findTool(_:) -> URL?`: locates a helper binary (in the .app bundle first, then `/opt/homebrew/bin`, then `/usr/local/bin`)
+- `ytDlpCommonArgs()`: shared yt-dlp args (JS runtime, ffmpeg location)
 - `downloadFromYouTube()` — full async pipeline (in `// MARK: - YouTube Download`)
 - `remuxToM4A(src:dst:)` — wraps `AVAssetExportSession` or `avconvert` to produce standard m4a
 - `validateAudioFile(_:)` — checks output has audio tracks and non-trivial size

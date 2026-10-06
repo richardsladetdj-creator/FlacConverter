@@ -33,6 +33,18 @@ curl -fL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos
   -o "$MACOS_DIR/yt-dlp"
 chmod +x "$MACOS_DIR/yt-dlp"
 
+echo "== Download deno (JS runtime yt-dlp needs for YouTube) =="
+if [[ "$(uname -m)" == "arm64" ]]; then DENO_ARCH="aarch64"; else DENO_ARCH="x86_64"; fi
+DENO_ZIP=$(mktemp /tmp/deno_XXXXXX.zip)
+if curl -fL "https://github.com/denoland/deno/releases/latest/download/deno-${DENO_ARCH}-apple-darwin.zip" -o "$DENO_ZIP"; then
+  unzip -o -j "$DENO_ZIP" deno -d "$MACOS_DIR" >/dev/null
+  chmod +x "$MACOS_DIR/deno"
+  echo "Bundled deno for $DENO_ARCH"
+else
+  echo "WARN: Could not download deno — YouTube downloads may fail with HTTP 403"
+fi
+rm -f "$DENO_ZIP"
+
 echo "== Download ffmpeg + ffprobe =="
 ARCH=$(uname -m)
 if [[ "$ARCH" == "arm64" ]]; then
